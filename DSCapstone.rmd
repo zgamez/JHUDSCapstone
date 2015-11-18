@@ -1,0 +1,161 @@
+---
+title: "Relative effect of 'High Charisma' users on high Yelp ratings"
+author: "Data Science Capstone - ZGomez"
+date: "November 22, 2015"
+output: pdf_document
+---
+
+```{r include=FALSE, echo=FALSE}
+library(caret)
+library(randomForest)
+library(parallel)
+library(doParallel)
+library(jsonlite)
+library(pROC)
+datRUBcuas_PHX_full <- readRDS("datRUBcuas_PHX-full.rds")
+training <- readRDS("training.rds")
+# testfile <- readRDS("testfile.rds")
+validation <- readRDS("validation.rds")
+RocImpPHX <- readRDS("RocImpPHX.rds")
+RocImpUC <- readRDS("RocImpUC.rds")
+RocImpUS <- readRDS("RocImpUS.rds")
+
+load("modelRUBcuas_PHX-SVM3cp8cv10MCsam.rda")
+load("modelRUBcuas_PHXRest-RF3cp8cv10v41MCsam.rda")
+load("modelRUBcuas_PHXRest-LR3cp8cv10v41MCsam.rda")
+load("modelRUBcuas_PHX-C503cp8cv10MCsam.rda")
+load("modelRUBcuas_PHXRest-LR3cp8cv10v41MC.rda")
+set.seed(123456)
+
+```
+
+**INTRODUCTION**
+----
+Yelp was founded in 2004 to "help people find great local businesses like dentists, hair stylists and mechanics." The dataset considered is part of Round 6 of the Yelp Dataset Challenge (http://www.yelp.com/dataset_challenge). We are interested in resolving the following question :
+
+*What is the effect of "promoters" on business reviews ?. We define promoters as the users with higher audience that with their comments and votes influence others reviews. In other words, We believe that opinionated users with high charisma have greater effect in how other vote which may have an impact on the business.*
+
+**METHODS**
+---
+**Computational Limitations:** We are limited to a Win 7x64 SP1 - Intel(R) Core(TM) i5-2520M CPU @ 2.50GHz 2501 MHz processor with 12GB memory. R version 3.2.1 (2015-06-18) World-Famous Astronaut with R Studio 0.99.473.
+
+**Reproducibility:** Due to compilation time we are not running heavy portions of the code  within the RMD file but is stored in this git hub : https://github.com/zgamez/JHUDSCapstone
+
+**Exploratory Analysis**
+There are 5 huge json files with data about reviews, users, business attributes, and summary by business. We've chosen to ignore the "tip" file as does not contribute to resolving our question.
+
+Our interest lies in very specific users which we can compare with the general population. We also think that such users operate in local markets as one of Yelp characteristics is to be specific by business/city. This provides an opportunity to use a set of the data and then attempt to generalize the results/methods. Due to time and memory limitations we will restrict our analysis to **Restaurants in the Phoenix area**.
+
+We have also characterized operating hours as total hours for Weekday and total hours on Weekends hence removing the hours vector columns. 
+
+**Text Mining**
+We leveraged the 'sentiment' package which is based on TM. It is a Bayes based algorithm that helped characterize 'text' column as 'polarity' (levels:negative, neutral, positive) 'emotion' (levels: anger, disgust, fear, joy, sadness, surprise, unknown). Intent is to determine if a emotional review is more prevalent to one from an 'influencer'. 
+
+**Modeling**
+
+*Variable Importance:*   Since the key of our research interest is to determine relative importance of Influencer User Factors (fans + votes x useful, funny, cool) VarImp is the most relevant outcome of this research. We opted for a 'Model Independent Metric' even considering than a the model-based approach could provide insight on the correlation structure. For this classification model ROC curve analysis is conducted on each predictor and for 'start.x' multi-class the problem is decomposed into all pair-wise problems and the area under the curve is calculated for each class pair (i.e. class 1 vs. class 2, class 2 vs. class 3 etc.). For a specific class, the maximum area under the curve across the relevant pair-wise AUC's is used as the variable importance measure [3].
+
+*Key variables:*  
+
+- Influencer User Factors: fans + votes x useful/funny/cool
+- start.x ~. (relevant restaurant variables[appendix-Table 1] + sentiment)
+
+*Uneven class:*   As seen in fig-a 'start.x' distribution is quite uneven. We've choose to group lowest reviews into a '123' level leaving 3 classes better distributed. This addresses the issues described in [2] and also is consistent with our intent to discover the effects of influencers on good reviews (4&5's).
+
+*Models:*   We tested several algorithms as summarized in result section. We were unable to run a model to test for accuracy for the +1M reviews in the US/Restaurant categories due to computing limitations and Text Mining performance (~20min for 10k lines). We selected MeanROC as metric to be able to compare with 'filterVarImp' approach applied to the whole set. 
+
+*Parameters:*
+
+- Training at 80% / Test 20% (500 lines were reserved for final test if needed)
+- Train Control: Cross Validation 10 times and classProbs = TRUE & summaryFunction = multiClassSummary to address the stars.x with 3 levels and to calculate Mean ROC.
+- Metric: Mean ROC. Note that selected Log Regression variable importance is measured within model as the absolute value of the t-statistic but the model will be selected with Mean ROC and will use the VarImp plot as reference only.
+
+**RESULTS**
+---
+We benchmarked different Algorithms with a minimum set of ~1K lines set to compare MeanROC. Slide 3 in ref [4] shows that Logistics regression performs well compared to c50 boosted trees and SVM and we cannot afford RF for the selected set ~112k lines for Restaurants in Phoenix. 
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, fig.height=2.7, fig.width=9}
+plot(modelFitLR3c41MC, main="Model Dependent | Multinomial Model ROC")
+```
+
+```{r warning=FALSE, message=FALSE, echo=FALSE, fig.height=2.7, fig.width=9}
+ValPredProb <- predict(modelFitLR3c41MC, validation, type = "prob")
+ROCX5 <- roc(ifelse(validation[,"stars.x"] == "X5", 1, 0), ValPredProb$X5)  
+plot(ROCX5, col = "blue", main="Model Independent | ROC/AUC  - X5")
+```
+
+We can appreciatte Multinomial Model ROC ~0.74 to be consistent with Model Independent ROC/AUC for X5 which validates considering Model Independent filterVarImp to generalize reults as follows :
+
+*R1: Multinomial Regression Model based Variable Importance*
+
+```{r echo=FALSE, fig.height=2.7, fig.width=9}
+VI <- varImp(modelFitLR3c41MC, scale = FALSE)  
+plot(VI, main = "Variable Importance", top = 10)
+```
+
+*R2: Model Independent Model (ROC) -  filterVarImp function | Phoenix-Restaurants*
+
+```{r echo=FALSE}
+RocImpPHX[order(RocImpPHX$X5, decreasing = TRUE), , drop = FALSE][1:6,]
+```
+
+*R3: Model Independent Model (ROC) -  filterVarImp function | Urbana-Restaurants*
+
+```{r echo=FALSE}
+RocImpUC[order(RocImpUC$X5, decreasing = TRUE), , drop = FALSE][1:6,]
+```
+
+*R4: Model Independent Model (ROC) -  filterVarImp function | US-Restaurants*
+
+```{r echo=FALSE}
+RocImpUS[order(RocImpUS$X5, decreasing = TRUE), , drop = FALSE][1:6,]
+```
+
+Per R2 **'fans'** have good relevance in the independent model approach (filterVarImp) and the same effect is noticeable in a different subset general to the U.S. Restaurant set. Emotion and Polarity is prevalent as well and rank well in the Multinom model dependent (VarImp). {Polarity was not included in R4 due to computational limitations ~33-35hrs to run}.
+
+
+**DISCUSSION**
+---
+
+Section R2 shows **'fans'** have top relevance in the independent model approach which shows the effect of "Net Promoters" as characterized by fans/votes.x.~ predictors. We think there is an opportunity to identify and recruit such users and also promptly addressing reviews that may later be cause of decreased business. In addition, R3 demonstrates the effect is a different user base/location subset in Urbana IL and R4 tested for generalization to the full U.S. user base for the Restaurants subset. Results also show that 'fans' base is as prevalent as emotional reviews.
+
+In the case of section R1 results utilizing in-model variable importance we can appreciate similar results as to 'fans' being a top predictor but we should consider that this method would consider the absolute value of the t-statistic for each model parameter is used [3] which is why we choose **mean_ROC** as metric in the model selection and also to be able to compare with the model independent approach and to overcome computing limitations to run the model to the full +1M US restaurant reviews.
+
+**What is the effect of "promoters" on business reviews ?.** *Therefore, We propose that both 'Influential Users' (fans and votes.x) and their text reviews (emotion and polarity) are key predictors of high scores.*
+ 
+For future research we suggest that it should be possible to create a undirected network graph depicting the clusters of 'influential users' in an area (ie Phoenix). In addition, 'enhanced text mining' can be used to characterize review/text vs. business avg. starts to determine the effect of such users over time. The Net Promoter Score, itself, is calculated based on responses to a single question: How likely is it that you would recommend our company/product/service to a friend or colleague? so the proposed research may be able address this concern.
+
+[1] discusses some criticism of NPS, in specific, "NPS does not provide proof of a causal connection between NPS and growth". We have attempted in this report to demonstrate a method to use massive quantitative and qualitative information that may lead to address this issue.
+
+**REFERENCES**
+---
+[1] Net Promoter. In Wikipedia. Retrieved October 17, 2015, from https://en.Wikipedia.org/wiki/Net_Promoter
+
+[2] Lin & Chen. "Class-imbalanced classifiers for high-dimensional data". http://bib.oxfordjournals.org/content/early/2012/03/08/bib.bbs006.full
+
+[3] http://topepo.github.io/caret/varimp.html
+
+[4] http://rpubs.com/zgomez/JHUDSCapstone
+
+[5] https://github.com/zgamez/JHUDSCapstone
+
+**APPENDIX**
+---
+```{r echo=FALSE}
+par(mfrow=c(3,2))
+hist(datRUBcuas_PHX_full$fans, col="lightblue", main="Fans Distribution", xlab="Fans", sub="fig-A")
+
+plot(datRUBcuas_PHX_full$fans ~ datRUBcuas_PHX_full$stars.x, col="lightblue", main="Fans vs. Stars/Review", xlab="Stars", ylab="fans", sub="fig-B")
+
+boxplot(datRUBcuas_PHX_full$stars.x ~ datRUBcuas_PHX_full$polarity, col="lightblue", main="Polarity vs Stars/Review", xlab="Polarity", sub="fig-C")
+
+boxplot(datRUBcuas_PHX_full$stars.x ~ datRUBcuas_PHX_full$emotion, col="lightblue", main="Emotion Stars/Review", xlab="Emotion", sub="fig-D")
+
+hist(datRUBcuas_PHX_full$stars.x, col="lightblue", main="Phoenix Restaurants Stars/Review Dist", xlab="Stars", sub="fig-E")
+```
+
+Table I - Variables :
+```{r echo=FALSE}
+names(datRUBcuas_PHX_full)
+```
+
